@@ -1,6 +1,10 @@
 import Fastify from "fastify";
+import multipart from "@fastify/multipart";
 import { createReadStream, existsSync, statSync } from "node:fs";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { config } from "../config";
 import { log } from "../logger";
@@ -30,6 +34,9 @@ async function main(): Promise<void> {
   const queue = startQueue({ store, storage, dataDir: DATA_DIR });
 
   const app = Fastify({ logger: false });
+  await app.register(multipart, {
+    limits: { fileSize: 60 * 1024 * 1024, files: 1 },
+  });
 
   app.get("/health", async () => ({
     ok: true,
@@ -37,11 +44,47 @@ async function main(): Promise<void> {
     time: new Date().toISOString(),
   }));
 
-  // Submit a job: { url } or { title, photos: [server paths] }.
+  // Dashboard.
+  const webDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "web");
+  app.get("/", async (_req, reply) => {
+    const html = await readFile(path.join(webDir, "index.html"), "utf8");
+    reply.header("content-type", "text/html; charset=utf-8");
+    return reply.send(html);
+  });
+
+  // Photo/clip/music upload (multipart, one file per request).
+  const ALLOWED_EXT = new Set([".jpg", ".jpeg", ".png", ".webp", ".mp4", ".mov", ".mp3", ".wav"]);
+  app.post("/uploads", async (req, reply) => {
+    const part = await req.file();
+    if (!part) return reply.code(400).send({ error: "no file" });
+    const ext = path.extname(part.filename ?? "").toLowerCase();
+    if (!ALLOWED_EXT.has(ext)) {
+      return reply.code(400).send({ error: `unsupported file type "${ext}"` });
+    }
+    const dir = path.join(DATA_DIR, "uploads");
+    await mkdir(dir, { recursive: true });
+    const dest = path.join(dir, `${randomUUID()}${ext}`);
+    await writeFile(dest, await part.toBuffer());
+    log.info(`upload → ${dest}`);
+    return reply.code(201).send({ path: dest });
+  });
+
+  // Submit a job: { url } or { title, photos: [paths from /uploads] }.
   app.post("/jobs", async (req, reply) => {
     const parsed = JobInputSchema.safeParse(req.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid body" });
+    }
+    // photos/music must point inside the uploads dir — never arbitrary
+    // server paths (they get copied into the served public dir).
+    const uploadsDir = path.join(DATA_DIR, "uploads") + path.sep;
+    const mediaPaths = [...(parsed.data.photos ?? []), parsed.data.music].filter(
+      (p): p is string => Boolean(p),
+    );
+    for (const p of mediaPaths) {
+      if (!path.resolve(p).startsWith(uploadsDir)) {
+        return reply.code(400).send({ error: "media paths must come from /uploads" });
+      }
     }
     const job = store.create(parsed.data);
     log.info(`job ${job.id} queued (${parsed.data.url ?? parsed.data.title})`);
@@ -98,6 +141,7 @@ async function main(): Promise<void> {
 function publicJob(job: ReturnType<JobStore["create"]>) {
   return {
     id: job.id,
+    title: job.input.title ?? job.input.url ?? job.id.slice(0, 8),
     status: job.status,
     progress: job.progress,
     error: job.error,

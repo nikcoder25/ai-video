@@ -9,6 +9,8 @@ export interface BuildPropsInput {
   clips: string[];
   voice: VoiceResult;
   music: Music | null;
+  /** Product info for the end-card; omit to skip the card. */
+  cta?: { title: string; price: string | null } | null;
 }
 
 /**
@@ -17,7 +19,7 @@ export interface BuildPropsInput {
  */
 export function buildProps(input: BuildPropsInput): UGCAdProps {
   log.step("Build props (beat-snap cuts)");
-  const { hook, clips, voice, music } = input;
+  const { hook, clips, voice, music, cta } = input;
   const duration = Math.max(voice.duration, 3);
 
   const beats = beatGrid(music?.bpm ?? config.defaultBpm, duration);
@@ -61,5 +63,13 @@ export function buildProps(input: BuildPropsInput): UGCAdProps {
       activeColor: "#FFE24B",
       baseColor: "#FFFFFF",
     },
+    cta: cta
+      ? {
+          // Keep the card short: first title clause only.
+          title: cta.title.split(/[|–—-]/)[0].trim().slice(0, 48),
+          price: cta.price,
+          line: "Tap the link",
+        }
+      : null,
   };
 }

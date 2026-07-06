@@ -120,7 +120,13 @@ export async function runJob(
     const voice = await synthesizeVoice(`${v.hook}. ${v.script}`, audioAbs);
     const voiceForProps = { ...voice, src: voice.src ? toPublic(audioAbs) : "" };
 
-    const props = buildProps({ hook: v.hook, clips, voice: voiceForProps, music });
+    const props = buildProps({
+      hook: v.hook,
+      clips,
+      voice: voiceForProps,
+      music,
+      cta: { title: product.title, price: product.price },
+    });
 
     const propsPath = path.join(jobDir, `ad-${i + 1}.props.json`);
     await writeFile(propsPath, JSON.stringify(props, null, 2));

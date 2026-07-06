@@ -34,7 +34,10 @@ const Shot: React.FC<{ segment: Segment; index: number }> = ({ segment, index })
   const punch = interpolate(frame, [0, segFrames], [0, segment.punchIn], {
     extrapolateRight: "clamp",
   });
-  const scale = 1.06 + punch;
+  // Cut-pop: land each cut slightly zoomed and settle in ~5 frames — the
+  // signature "punched" feel of hand-edited UGC.
+  const pop = interpolate(frame, [0, 5], [0.035, 0], { extrapolateRight: "clamp" });
+  const scale = 1.06 + punch + pop;
 
   // 2px handheld shake — deterministic per-segment sine so renders are stable.
   const phase = index * 1.7;
@@ -167,6 +170,71 @@ const HookCard: React.FC<{ hook: string }> = ({ hook }) => {
   );
 };
 
+/** Product end-card over the final ~1.6s: title, price, pulsing CTA line. */
+const EndCard: React.FC<{ cta: NonNullable<UGCAdProps["cta"]> }> = ({ cta }) => {
+  const frame = useCurrentFrame();
+  const { fps, durationInFrames } = useVideoConfig();
+  const holdFrames = Math.round(1.6 * fps);
+  const startFrame = durationInFrames - holdFrames;
+  if (frame < startFrame) return null;
+
+  const local = frame - startFrame;
+  const enter = spring({ frame: local, fps, config: { damping: 15 }, durationInFrames: 12 });
+  const rise = interpolate(enter, [0, 1], [60, 0]);
+  // Gentle pulse on the CTA line (two beats per second at 30fps).
+  const pulse = 1 + Math.sin(local / 4.8) * 0.04;
+
+  return (
+    <AbsoluteFill style={{ justifyContent: "flex-end", alignItems: "center" }}>
+      <AbsoluteFill
+        style={{
+          background: "linear-gradient(to top, rgba(0,0,0,0.82) 0%, rgba(0,0,0,0) 45%)",
+          opacity: enter,
+        }}
+      />
+      <div
+        style={{
+          position: "relative",
+          transform: `translateY(${rise}px)`,
+          opacity: enter,
+          textAlign: "center",
+          paddingBottom: 140,
+          fontFamily: poppins,
+          maxWidth: "84%",
+        }}
+      >
+        <div style={{ fontSize: 58, fontWeight: 900, color: "#fff", lineHeight: 1.12 }}>
+          {cta.title}
+        </div>
+        {cta.price ? (
+          <div style={{ fontSize: 46, fontWeight: 800, color: "#FFE24B", marginTop: 14 }}>
+            {cta.price}
+          </div>
+        ) : null}
+        <div
+          style={{
+            display: "inline-block",
+            marginTop: 26,
+            padding: "18px 44px",
+            borderRadius: ansiRadius,
+            background: "#FFE24B",
+            color: "#111",
+            fontSize: 40,
+            fontWeight: 900,
+            textTransform: "uppercase",
+            letterSpacing: 1,
+            transform: `scale(${pulse})`,
+          }}
+        >
+          {cta.line}
+        </div>
+      </div>
+    </AbsoluteFill>
+  );
+};
+
+const ansiRadius = 999;
+
 /** Film grain + vignette so AI/still footage reads as phone-shot. */
 const Realism: React.FC = () => {
   const frame = useCurrentFrame();
@@ -203,6 +271,7 @@ export const UGCAd: React.FC<UGCAdProps> = ({
   voiceover,
   music,
   captionStyle,
+  cta,
 }) => {
   const { fps, durationInFrames } = useVideoConfig();
 
@@ -220,7 +289,18 @@ export const UGCAd: React.FC<UGCAdProps> = ({
 
       <Realism />
       <HookCard hook={hook} />
-      <Captions words={voiceover.words} style={captionStyle} />
+      {/* Captions hand off to the end-card for the final 1.6s. */}
+      <Sequence
+        from={0}
+        durationInFrames={
+          cta
+            ? Math.max(1, durationInFrames - Math.round(1.6 * fps))
+            : durationInFrames
+        }
+      >
+        <Captions words={voiceover.words} style={captionStyle} />
+      </Sequence>
+      {cta ? <EndCard cta={cta} /> : null}
 
       {voiceover.src ? <Audio src={resolveSrc(voiceover.src)} /> : null}
       {music?.src ? (

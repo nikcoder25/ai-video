@@ -47,6 +47,13 @@ export interface CaptionStyle {
  * Declared as a `type` (not `interface`) so it satisfies Remotion's
  * `Record<string, unknown>` prop constraint.
  */
+/** Optional end-card shown over the last ~1.6s. */
+export interface CTACard {
+  title: string;
+  price: string | null;
+  line: string;
+}
+
 export type UGCAdProps = {
   fps: number;
   width: number;
@@ -57,4 +64,6 @@ export type UGCAdProps = {
   voiceover: VoiceOver;
   music: Music | null;
   captionStyle: CaptionStyle;
+  /** Product end-card (title + price + CTA line). Omit to disable. */
+  cta?: CTACard | null;
 };
