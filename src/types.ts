@@ -21,6 +21,12 @@ export interface Segment {
   duration: number;
   /** Extra zoom applied across the segment for a punch-in feel (e.g. 0.08 = +8%). */
   punchIn: number;
+  /** Ken Burns: reverse the zoom (start tight, settle wide). */
+  zoomOut?: boolean;
+  /** Ken Burns: total drift in px across the segment, [x, y]. */
+  pan?: [number, number];
+  /** Quick white flash at the head of this cut (editor accent). */
+  flash?: boolean;
 }
 
 export interface VoiceOver {
@@ -47,6 +53,13 @@ export interface CaptionStyle {
  * Declared as a `type` (not `interface`) so it satisfies Remotion's
  * `Record<string, unknown>` prop constraint.
  */
+/** Optional end-card shown over the last ~1.6s. */
+export interface CTACard {
+  title: string;
+  price: string | null;
+  line: string;
+}
+
 export type UGCAdProps = {
   fps: number;
   width: number;
@@ -57,4 +70,6 @@ export type UGCAdProps = {
   voiceover: VoiceOver;
   music: Music | null;
   captionStyle: CaptionStyle;
+  /** Product end-card (title + price + CTA line). Omit to disable. */
+  cta?: CTACard | null;
 };
