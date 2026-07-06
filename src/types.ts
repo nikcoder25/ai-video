@@ -21,6 +21,12 @@ export interface Segment {
   duration: number;
   /** Extra zoom applied across the segment for a punch-in feel (e.g. 0.08 = +8%). */
   punchIn: number;
+  /** Ken Burns: reverse the zoom (start tight, settle wide). */
+  zoomOut?: boolean;
+  /** Ken Burns: total drift in px across the segment, [x, y]. */
+  pan?: [number, number];
+  /** Quick white flash at the head of this cut (editor accent). */
+  flash?: boolean;
 }
 
 export interface VoiceOver {

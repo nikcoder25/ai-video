@@ -29,6 +29,18 @@ export function buildProps(input: BuildPropsInput): UGCAdProps {
     beats,
   });
 
+  // Deterministic motion variety: cycle pan directions and zoom direction so
+  // consecutive shots never move the same way (the "edited, not generated"
+  // signature). Pan magnitudes are subtle — Ken Burns, not a slide.
+  const PANS: [number, number][] = [
+    [26, -14],
+    [-24, 12],
+    [0, -28],
+    [22, 16],
+    [-26, 0],
+    [0, 26],
+  ];
+
   const segments: Segment[] = [];
   for (let i = 0; i < boundaries.length - 1; i++) {
     const start = boundaries[i];
@@ -37,8 +49,12 @@ export function buildProps(input: BuildPropsInput): UGCAdProps {
       clip: clips[i % clips.length],
       start,
       duration: end - start,
-      // Alternate punch direction feel: bigger push on odd segments.
+      // Alternate punch intensity: bigger push on odd segments.
       punchIn: i % 2 === 0 ? 0.06 : 0.1,
+      zoomOut: i % 3 === 1,
+      pan: PANS[i % PANS.length],
+      // White-flash accent every 3rd cut (never on the opening shot).
+      flash: i > 0 && i % 3 === 0,
     });
   }
 

@@ -18,9 +18,20 @@ const resolveSrc = (src: string): string =>
   /^(https?:|data:|blob:)/.test(src) ? src : staticFile(src);
 
 // Self-contained font stack — no render-time network fetch (deterministic,
-// works offline). To use exact Poppins, drop a Poppins woff2 into public/ and
-// register it via @font-face / staticFile; the stack picks it up first.
+// works offline). Drop Poppins-ExtraBold.woff2 into public/fonts/ and the
+// @font-face below picks it up; otherwise the system stack is used.
 const poppins = 'Poppins, "Arial Black", "Helvetica Neue", system-ui, sans-serif';
+
+const FontFace: React.FC = () => (
+  <style>{`
+    @font-face {
+      font-family: "Poppins";
+      src: url("${staticFile("fonts/Poppins-ExtraBold.woff2")}") format("woff2");
+      font-weight: 700 900;
+      font-display: swap;
+    }
+  `}</style>
+);
 
 const isVideo = (src: string) => /\.(mp4|mov|webm|m4v)$/i.test(src);
 
@@ -29,17 +40,23 @@ const Shot: React.FC<{ segment: Segment; index: number }> = ({ segment, index })
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
   const segFrames = Math.max(1, Math.round(segment.duration * fps));
+  const t = Math.min(1, frame / segFrames); // 0..1 through the shot
 
-  // Base crop-zoom (1.06x) hides any edge watermark; punch-in ramps across shot.
-  const punch = interpolate(frame, [0, segFrames], [0, segment.punchIn], {
-    extrapolateRight: "clamp",
-  });
+  // Base crop-zoom (1.06x) hides any edge watermark. Ken Burns: zoom ramps
+  // in (or out, reversed) across the shot with a subtle directional pan.
+  const punch = segment.zoomOut
+    ? segment.punchIn * (1 - t) // start tight, settle wide
+    : segment.punchIn * t; // classic push-in
   // Cut-pop: land each cut slightly zoomed and settle in ~5 frames — the
   // signature "punched" feel of hand-edited UGC.
   const pop = interpolate(frame, [0, 5], [0.035, 0], { extrapolateRight: "clamp" });
   const scale = 1.06 + punch + pop;
 
-  // 2px handheld shake — deterministic per-segment sine so renders are stable.
+  // Directional drift (Ken Burns pan) + 2px handheld shake. Both deterministic
+  // so renders are reproducible.
+  const [panX, panY] = segment.pan ?? [0, 0];
+  const driftX = panX * t;
+  const driftY = panY * t;
   const phase = index * 1.7;
   const shakeX = Math.sin(frame / 6 + phase) * 2;
   const shakeY = Math.cos(frame / 7 + phase) * 2;
@@ -48,8 +65,15 @@ const Shot: React.FC<{ segment: Segment; index: number }> = ({ segment, index })
     width: "100%",
     height: "100%",
     objectFit: "cover",
-    transform: `scale(${scale}) translate(${shakeX}px, ${shakeY}px)`,
+    transform: `scale(${scale}) translate(${driftX + shakeX}px, ${driftY + shakeY}px)`,
+    // Phone color grade: slight saturation + contrast lift.
+    filter: "saturate(1.08) contrast(1.05)",
   };
+
+  // White-flash accent: 4-frame burst at the head of flagged cuts.
+  const flashOpacity = segment.flash
+    ? interpolate(frame, [0, 4], [0.55, 0], { extrapolateRight: "clamp" })
+    : 0;
 
   return (
     <AbsoluteFill style={{ backgroundColor: "#000" }}>
@@ -60,11 +84,42 @@ const Shot: React.FC<{ segment: Segment; index: number }> = ({ segment, index })
       ) : (
         <AbsoluteFill style={{ backgroundColor: "#111" }} />
       )}
+      {flashOpacity > 0 ? (
+        <AbsoluteFill style={{ backgroundColor: "#fff", opacity: flashOpacity }} />
+      ) : null}
     </AbsoluteFill>
   );
 };
 
-/** Word-by-word captions with a pop on the active word. */
+interface CaptionGroup {
+  words: WordTiming[];
+  start: number;
+  end: number;
+}
+
+/**
+ * Chunk word timings into caption phrases: a new group on speech gaps
+ * (>0.45s) or after 4 words. This is how human editors caption UGC — a
+ * stable phrase on screen, one word highlighted as it's spoken.
+ */
+function groupWords(words: WordTiming[]): CaptionGroup[] {
+  const groups: CaptionGroup[] = [];
+  let cur: WordTiming[] = [];
+  for (const w of words) {
+    const prev = cur[cur.length - 1];
+    if (cur.length >= 4 || (prev && w.start - prev.end > 0.45)) {
+      groups.push({ words: cur, start: cur[0].start, end: prev.end });
+      cur = [];
+    }
+    cur.push(w);
+  }
+  if (cur.length) {
+    groups.push({ words: cur, start: cur[0].start, end: cur[cur.length - 1].end });
+  }
+  return groups;
+}
+
+/** Phrase captions: whole group visible, active word popped + highlighted. */
 const Captions: React.FC<{
   words: WordTiming[];
   style: UGCAdProps["captionStyle"];
@@ -73,22 +128,29 @@ const Captions: React.FC<{
   const { fps } = useVideoConfig();
   const t = frame / fps;
 
-  const activeIdx = words.findIndex((w) => t >= w.start && t < w.end);
-  if (activeIdx < 0) return null;
+  const groups = React.useMemo(() => groupWords(words), [words]);
+  // Keep the phrase up through trailing silence until the next group starts.
+  const gi = groups.findIndex(
+    (g, i) => t >= g.start && (i === groups.length - 1 ? t < g.end : t < groups[i + 1].start),
+  );
+  if (gi < 0) return null;
+  const group = groups[gi];
 
-  // Show a small window around the active word (a caption "line").
-  const from = Math.max(0, activeIdx - 2);
-  const to = Math.min(words.length, activeIdx + 3);
-  const window = words.slice(from, to);
+  // Group entrance: quick rise+settle when the phrase appears.
+  const groupFrame = Math.max(0, Math.round((t - group.start) * fps));
+  const enter = spring({ frame: groupFrame, fps, config: { damping: 13 }, durationInFrames: 7 });
 
-  const active = words[activeIdx];
-  const pop = spring({
-    frame: Math.round((t - active.start) * fps),
-    fps,
-    config: { damping: 12, stiffness: 200, mass: 0.5 },
-    durationInFrames: 8,
-  });
-  const activeScale = interpolate(pop, [0, 1], [0.8, 1.12]);
+  const activeIdx = group.words.findIndex((w) => t >= w.start && t < w.end);
+  const active = activeIdx >= 0 ? group.words[activeIdx] : null;
+  const pop = active
+    ? spring({
+        frame: Math.round((t - active.start) * fps),
+        fps,
+        config: { damping: 12, stiffness: 200, mass: 0.5 },
+        durationInFrames: 8,
+      })
+    : 0;
+  const activeScale = interpolate(pop, [0, 1], [0.86, 1.12]);
 
   return (
     <AbsoluteFill
@@ -108,18 +170,22 @@ const Captions: React.FC<{
           fontFamily: poppins,
           fontWeight: 800,
           fontSize: 68,
-          lineHeight: 1.15,
+          lineHeight: 1.2,
           textTransform: "uppercase",
           textAlign: "center",
+          opacity: enter,
+          transform: `translateY(${interpolate(enter, [0, 1], [18, 0])}px)`,
         }}
       >
-        {window.map((w, i) => {
-          const isActive = from + i === activeIdx;
+        {group.words.map((w, i) => {
+          const isActive = i === activeIdx;
+          const spoken = t >= w.start; // already-spoken words stay bright
           return (
             <span
-              key={`${from + i}-${w.word}`}
+              key={`${gi}-${i}`}
               style={{
                 color: isActive ? style.activeColor : style.baseColor,
+                opacity: spoken ? 1 : 0.55,
                 transform: isActive ? `scale(${activeScale})` : "scale(1)",
                 display: "inline-block",
                 textShadow: "0 4px 18px rgba(0,0,0,0.65)",
@@ -277,6 +343,7 @@ export const UGCAd: React.FC<UGCAdProps> = ({
 
   return (
     <AbsoluteFill style={{ backgroundColor: "#000" }}>
+      <FontFace />
       {segments.map((seg, i) => (
         <Sequence
           key={i}
