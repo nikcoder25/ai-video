@@ -1,7 +1,7 @@
-# UGC Ad Factory — Phase 1 (Core Engine)
+# UGC Ad Factory
 
-Takes a **product URL** and outputs **3 expert-grade 9:16 UGC ads** to `./out`.
-No UI yet — this is the render pipeline the SaaS will wrap.
+Takes a **product URL (or title + photos)** and outputs **3 expert-grade 9:16
+UGC ads**. Phase 1 = the render pipeline; Phase 2 = the job API around it.
 
 ```
 product URL
@@ -48,6 +48,26 @@ the scrape → script → beat-snap logic:
 MOCK=1 npm run job -- "https://your-store.com/products/neck-fan"
 ```
 
+## Run as a service (Phase 2 backend)
+
+```bash
+npm run serve                # API on :8787, queue worker in-process
+```
+
+| Route | What |
+|---|---|
+| `POST /jobs` | Submit `{"url": "..."}` or `{"title": "...", "photos": ["/abs/p1.jpg", ...]}` (optional `description`, `price`, `music`, `bpm`, `render:false`) |
+| `GET /jobs` | Recent jobs |
+| `GET /jobs/:id` | Status + `results[].video` download links |
+| `GET /jobs/:id/files/:name` | Stream a finished MP4 / props JSON |
+| `GET /health` | Liveness |
+
+Jobs persist in SQLite (`data/jobs.db`, Node's built-in driver — no native
+deps); stale `running` jobs re-queue on boot. Renders run one-at-a-time
+(CPU-bound). Finished files live on disk and are served by the API; set
+`SUPABASE_URL` + `SUPABASE_SERVICE_KEY` (+ optional `SUPABASE_BUCKET`) to
+upload artifacts to Supabase Storage instead.
+
 ## Preview / tune the template
 
 ```bash
@@ -61,7 +81,7 @@ word timestamps flow straight into `voiceover.words`.
 
 | Path | Role |
 |------|------|
-| `src/worker.ts` | CLI orchestrator (the pipeline) |
+|  `src/worker.ts` | CLI orchestrator (the pipeline) |
 | `src/pipeline/scrape.ts` | Product URL → title/price/images |
 | `src/pipeline/script.ts` | Claude → 3 hook+script variants |
 | `src/pipeline/voice.ts` | ElevenLabs → audio + word timings |
@@ -69,6 +89,11 @@ word timestamps flow straight into `voiceover.words`.
 | `src/pipeline/props.ts` | Assemble `UGCAdProps` per ad |
 | `src/pipeline/render.ts` | Bundle once, render each ad |
 | `src/remotion/UGCAd.tsx` | The expert-edit template |
+| `src/pipeline/run.ts` | Reusable `runJob()` (CLI + queue both call it) |
+| `src/server/index.ts` | Fastify REST API |
+| `src/server/queue.ts` | In-process queue worker |
+| `src/server/db.ts` | SQLite job store (`node:sqlite`) |
+| `src/storage/index.ts` | Local / Supabase storage adapter |
 
 ## Config
 
