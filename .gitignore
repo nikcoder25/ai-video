@@ -1,8 +1,0 @@
-node_modules/
-out/
-public/jobs/
-.env
-*.log
-.DS_Store
-.remotion/
-dist/
