@@ -23,6 +23,10 @@ class Storage(ABC):
     def put(self, local_path: str | Path, key: str) -> str:
         """Store the file under ``key`` and return a URL for it."""
 
+    @abstractmethod
+    def delete_prefix(self, prefix: str) -> int:
+        """Remove everything stored under ``prefix/``, returning files removed."""
+
     def local_path(self, key: str) -> Path | None:
         """On-disk location, when the backend has one."""
         return None
@@ -50,6 +54,15 @@ class LocalStorage(Storage):
         if not str(candidate).startswith(str(self.root.resolve())):
             return None
         return candidate if candidate.is_file() else None
+
+    def delete_prefix(self, prefix: str) -> int:
+        target = (self.root / prefix).resolve()
+        if not str(target).startswith(str(self.root.resolve())) or not target.is_dir():
+            return 0
+        count = sum(1 for f in target.rglob("*") if f.is_file())
+        shutil.rmtree(target, ignore_errors=True)
+        log.info("deleted %d file(s) under %s", count, prefix)
+        return count
 
 
 class R2Storage(Storage):
@@ -101,6 +114,18 @@ class R2Storage(Storage):
             Params={"Bucket": self.bucket, "Key": key},
             ExpiresIn=PRESIGN_EXPIRY_SEC,
         )
+
+    def delete_prefix(self, prefix: str) -> int:
+        deleted = 0
+        paginator = self.client.get_paginator("list_objects_v2")
+        for page in paginator.paginate(Bucket=self.bucket, Prefix=f"{prefix}/"):
+            keys = [{"Key": obj["Key"]} for obj in page.get("Contents", [])]
+            if not keys:
+                continue
+            self.client.delete_objects(Bucket=self.bucket, Delete={"Objects": keys})
+            deleted += len(keys)
+        log.info("deleted %d object(s) under r2://%s/%s/", deleted, self.bucket, prefix)
+        return deleted
 
 
 def get_storage() -> Storage:

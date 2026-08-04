@@ -13,7 +13,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, create_engine
-from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
+from sqlalchemy.orm import (
+    DeclarativeBase,
+    Mapped,
+    Session,
+    mapped_column,
+    relationship,
+    sessionmaker,
+)
 
 from config import get_settings
 from schemas import ClipOut, JobOut, JobStatus, Stage
@@ -112,11 +119,14 @@ class Clip(Base):
 _settings = get_settings()
 _url = _settings.database_url
 if _url.startswith("sqlite"):
-    # Resolve the sqlite file relative to the repo, and create its directory --
-    # SQLite will not make a missing parent and fails with a confusing error.
+    # Resolve a relative sqlite path against the repo, and always create the
+    # parent directory -- SQLite cannot make a missing parent and fails with
+    # "unable to open database file", which says nothing about why.
     prefix, _, tail = _url.partition(":///")
-    if tail and not tail.startswith("/"):
-        resolved = (Path(__file__).resolve().parent.parent / tail).resolve()
+    if tail:
+        resolved = Path(tail)
+        if not resolved.is_absolute():
+            resolved = (Path(__file__).resolve().parent.parent / tail).resolve()
         resolved.parent.mkdir(parents=True, exist_ok=True)
         _url = f"{prefix}:///{resolved}"
 

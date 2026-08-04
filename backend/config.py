@@ -62,6 +62,7 @@ class Settings:
     cors_origins: tuple[str, ...]
 
     mock: bool
+    keep_work: bool
 
     clip_min_sec: float
     clip_max_sec: float
@@ -118,6 +119,7 @@ def get_settings() -> Settings:
         max_upload_mb=int(_num("MAX_UPLOAD_MB", 2048)),
         cors_origins=tuple(o.strip() for o in origins.split(",") if o.strip()),
         mock=_flag("MOCK"),
+        keep_work=_flag("KEEP_WORK"),
         clip_min_sec=_num("CLIP_MIN_SEC", 20.0),
         clip_max_sec=_num("CLIP_MAX_SEC", 58.0),
         target_clip_count=int(_num("TARGET_CLIP_COUNT", 10)),

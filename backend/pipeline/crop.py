@@ -102,7 +102,9 @@ def _load_detector():
 
         def detect_cv(image) -> float | None:
             gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-            faces = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(40, 40))
+            faces = cascade.detectMultiScale(
+                gray, scaleFactor=1.1, minNeighbors=5, minSize=(40, 40)
+            )
             if len(faces) == 0:
                 return None
             x, _, w, h = max(faces, key=lambda f: f[2] * f[3])

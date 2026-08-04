@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -59,6 +60,42 @@ def overall_progress(stage: Stage, fraction: float) -> float:
     return round(lo + (hi - lo) * max(0.0, min(1.0, fraction)), 4)
 
 
+# Small text artifacts worth keeping for debugging and re-selection; everything
+# else in a work dir is regenerable and heavy.
+KEEP_FILES = {"candidates.json", "transcript.json"}
+
+
+def cleanup_work(work_dir: str | Path, *, remove_clips: bool) -> int:
+    """Delete a finished job's heavy intermediates, returning bytes freed.
+
+    An hour of 1080p source is ~2 GB and the wav another ~0.5 GB, per job,
+    forever -- a small VPS fills in days. ``remove_clips`` should be True only
+    when the clips were uploaded to storage and the copies here are redundant.
+    """
+    work = Path(work_dir)
+    if not work.is_dir():
+        return 0
+
+    freed = 0
+    for entry in work.iterdir():
+        if entry.name in KEEP_FILES:
+            continue
+        if entry.name == "clips" and not remove_clips:
+            continue
+        try:
+            if entry.is_dir():
+                freed += sum(f.stat().st_size for f in entry.rglob("*") if f.is_file())
+                shutil.rmtree(entry, ignore_errors=True)
+            else:
+                freed += entry.stat().st_size
+                entry.unlink()
+        except OSError:
+            log.warning("could not remove %s during cleanup", entry, exc_info=True)
+
+    log.info("cleaned %s, freed %.1f MB", work, freed / 1_048_576)
+    return freed
+
+
 def run_job(
     *,
     work_dir: str | Path,
@@ -94,7 +131,13 @@ def run_job(
     else:
         source = download_stage.ingest_upload(upload_path, work, title=title)  # type: ignore[arg-type]
     report(Stage.DOWNLOADING, 1.0)
-    log.info("source ready: %r, %.1fs, %dx%d", source.title, source.duration, source.width, source.height)
+    log.info(
+        "source ready: %r, %.1fs, %dx%d",
+        source.title,
+        source.duration,
+        source.width,
+        source.height,
+    )
 
     # --- transcribe -------------------------------------------------------
     report(Stage.TRANSCRIBING, 0.0)
@@ -147,5 +190,12 @@ def run_job(
             result.urls[clip.index] = uploader(clip)
             report(Stage.UPLOADING, i / len(result.clips))
     report(Stage.UPLOADING, 1.0)
+
+    # Server jobs clean up after themselves; CLI runs (no uploader) keep
+    # everything because they are the tuning loop and the source is expensive
+    # to re-fetch. Clip copies here are redundant once every clip uploaded.
+    if uploader and not settings.keep_work:
+        all_uploaded = len(result.urls) == len(result.clips)
+        cleanup_work(work, remove_clips=all_uploaded)
 
     return result

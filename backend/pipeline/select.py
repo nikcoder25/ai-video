@@ -102,11 +102,11 @@ CLIP_TOOL = {
                     "properties": {
                         "start": {
                             "type": "number",
-                            "description": "Start time in seconds, taken from a line's start timestamp.",
+                            "description": "Start in seconds, copied from a line timestamp.",
                         },
                         "end": {
                             "type": "number",
-                            "description": "End time in seconds, taken from a line's end timestamp.",
+                            "description": "End in seconds, copied from a line's end timestamp.",
                         },
                         "hook_score": {
                             "type": "integer",

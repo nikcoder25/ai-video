@@ -101,6 +101,65 @@ class TestFiles:
         assert client.get("/files/abc123/clip-01.mp4").status_code == 404
 
 
+class TestDeleteJob:
+    def test_unknown_job_is_404(self, client):
+        assert client.delete("/jobs/does-not-exist").status_code == 404
+
+    def test_running_job_is_refused(self, client):
+        job_id = new_id()
+        with session_scope() as session:
+            session.add(
+                Job(id=job_id, status=JobStatus.RUNNING, stage=Stage.RENDERING, progress=0.5)
+            )
+
+        assert client.delete(f"/jobs/{job_id}").status_code == 409
+        assert client.get(f"/jobs/{job_id}").status_code == 200
+
+    def test_delete_removes_job_and_files(self, client):
+        from config import get_settings
+        from storage import get_storage
+
+        job_id = client.post("/jobs", json={"youtube_url": "https://x.com/v"}).json()["id"]
+
+        # Simulate what a finished job leaves on disk.
+        storage = get_storage()
+        src = get_settings().work_dir / "seed.mp4"
+        src.parent.mkdir(parents=True, exist_ok=True)
+        src.write_bytes(b"\x00" * 64)
+        storage.put(src, f"{job_id}/clip-01.mp4")
+        work_dir = get_settings().work_dir / job_id
+        work_dir.mkdir(parents=True, exist_ok=True)
+        (work_dir / "source.mp4").write_bytes(b"\x00" * 64)
+
+        assert client.delete(f"/jobs/{job_id}").status_code == 204
+
+        assert client.get(f"/jobs/{job_id}").status_code == 404
+        assert storage.local_path(f"{job_id}/clip-01.mp4") is None
+        assert not work_dir.exists()
+
+    def test_delete_cascades_to_clip_rows(self, client):
+        from models import Clip
+
+        job_id = client.post("/jobs", json={"youtube_url": "https://x.com/v"}).json()["id"]
+        with session_scope() as session:
+            session.add(
+                Clip(
+                    job_id=job_id,
+                    title="t",
+                    hook_score=8,
+                    reason="r",
+                    start=0.0,
+                    end=25.0,
+                    url="/files/x/clip-01.mp4",
+                    index=1,
+                )
+            )
+
+        assert client.delete(f"/jobs/{job_id}").status_code == 204
+        with session_scope() as session:
+            assert session.query(Clip).filter(Clip.job_id == job_id).count() == 0
+
+
 class TestOrphanRecovery:
     def test_running_jobs_are_failed_on_boot(self, client):
         job_id = new_id()

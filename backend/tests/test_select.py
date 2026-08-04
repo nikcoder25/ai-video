@@ -133,7 +133,8 @@ class TestValidateCandidates:
         assert [c.start for c in out] == sorted(c.start for c in out)
 
     def test_never_exceeds_transcript_duration(self, sample_transcript):
-        raw = [self._raw(start=sample_transcript.duration - 30, end=sample_transcript.duration + 40)]
+        end_over = sample_transcript.duration + 40
+        raw = [self._raw(start=sample_transcript.duration - 30, end=end_over)]
         out = validate_candidates(raw, sample_transcript, min_sec=20, max_sec=58)
         for cand in out:
             assert cand.end <= sample_transcript.duration

@@ -106,11 +106,7 @@ def group_words(
         ends_sentence = is_sentence_end(word)
         ends_clause = is_clause_end(word) and len(current) >= 2
 
-        gap = 0.0
-        if i + 1 < len(words):
-            gap = words[i + 1].start - word.end
-        else:
-            gap = float("inf")
+        gap = words[i + 1].start - word.end if i + 1 < len(words) else float("inf")
 
         if at_cap or ends_sentence or ends_clause or gap > PAUSE_BREAK_SEC:
             lines.append(current)

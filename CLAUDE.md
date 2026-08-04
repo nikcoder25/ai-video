@@ -51,6 +51,7 @@ Backend runs on `:8000`, frontend proxies to it. Both sides code against this.
 | `GET /jobs/{id}` | — | `Job` |
 | `GET /jobs/{id}/clips` | — | `Clip[]` |
 | `GET /jobs` | `?limit=20` | `Job[]` |
+| `DELETE /jobs/{id}` | — | 204; removes clips from storage and the work dir. 409 while running |
 | `GET /files/{job_id}/{name}` | — | streams the mp4 (local storage only) |
 | `GET /health` | — | `{"status": "ok"}` |
 

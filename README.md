@@ -90,6 +90,7 @@ Backend on `:8000`. Full request/response shapes are in
 | `GET /jobs/{id}` | Status, stage, progress 0-1, error |
 | `GET /jobs/{id}/clips` | Rendered clips with download URLs |
 | `GET /jobs?limit=20` | Recent jobs |
+| `DELETE /jobs/{id}` | Remove a job, its stored clips, and its work dir (409 while running) |
 | `GET /files/{job}/{name}` | Stream a clip (local storage only) |
 | `GET /health` | Liveness |
 

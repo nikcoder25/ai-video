@@ -10,19 +10,20 @@ from __future__ import annotations
 
 import logging
 import re
+import shutil
 import threading
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from config import get_settings
 from models import Clip, Job, init_db, new_id, session_scope
-from pipeline.run import overall_progress, run_job
+from pipeline.run import cleanup_work, overall_progress, run_job
 from schemas import ClipOut, JobOut, JobStatus, RenderedClip, Stage
 from storage import LocalStorage, get_storage
 
@@ -138,6 +139,11 @@ def _process_job(job_id: str) -> None:
                     job.stage = Stage.FAILED
                     job.error = str(exc)[:1000]
                     job.updated_at = datetime.now(UTC)
+            # A failed job's partial downloads and renders are unreachable by
+            # the user (clips are served from storage, not the work dir), so
+            # only KEEP_WORK justifies keeping gigabytes of them.
+            if not settings.keep_work:
+                cleanup_work(work_dir, remove_clips=True)
             return
 
     with session_scope() as session:
@@ -281,6 +287,29 @@ def get_clips(job_id: str) -> list[ClipOut]:
         if job is None:
             raise HTTPException(404, "No such job")
         return [c.to_schema() for c in job.clips]
+
+
+@app.delete("/jobs/{job_id}", status_code=204, response_class=Response)
+def delete_job(job_id: str) -> Response:
+    """Remove a job, its clips, its stored files, and any work-dir leftovers."""
+    with session_scope() as session:
+        job = session.get(Job, job_id)
+        if job is None:
+            raise HTTPException(404, "No such job")
+        if job.status == JobStatus.RUNNING:
+            # The pipeline holds open file handles into these directories; a
+            # concurrent delete would fail the render in a confusing way.
+            raise HTTPException(409, "Job is still running; try again when it finishes")
+        session.delete(job)  # clips cascade
+
+    if SAFE_NAME.match(job_id):
+        get_storage().delete_prefix(job_id)
+        work_dir = settings.work_dir / job_id
+        if work_dir.is_dir():
+            shutil.rmtree(work_dir, ignore_errors=True)
+
+    log.info("deleted job %s", job_id)
+    return Response(status_code=204)
 
 
 @app.get("/files/{job_id}/{name}")

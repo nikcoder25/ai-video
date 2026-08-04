@@ -177,6 +177,17 @@ export function SpinnerIcon(props: IconProps) {
   );
 }
 
+export function TrashIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M4 7h16" />
+      <path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+      <path d="M6.5 7l1 12a1.5 1.5 0 0 0 1.5 1.4h6a1.5 1.5 0 0 0 1.5-1.4l1-12" />
+      <path d="M10 11v6M14 11v6" />
+    </Icon>
+  );
+}
+
 export function LogoMark(props: IconProps) {
   return (
     <svg viewBox="0 0 28 28" fill="none" aria-hidden="true" focusable="false" {...props}>

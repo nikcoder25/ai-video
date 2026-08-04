@@ -221,6 +221,31 @@ export function getClips(jobId: string, signal?: AbortSignal): Promise<Clip[]> {
   });
 }
 
+/**
+ * Remove a job, its stored clips, and its server-side files. 409 while the
+ * job is still running.
+ */
+export async function deleteJob(jobId: string, signal?: AbortSignal): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}/jobs/${encodeURIComponent(jobId)}`, {
+      method: "DELETE",
+      signal,
+    });
+  } catch (error) {
+    if (isAbort(error) || signal?.aborted) throw new ApiError("Request cancelled.", "aborted");
+    throw new ApiError(UNREACHABLE, "network");
+  }
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new ApiError(
+      extractDetail(body) ?? `The API returned ${response.status}.`,
+      "http",
+      response.status,
+    );
+  }
+}
+
 /** Clip URLs may be relative to the API host. */
 export function resolveClipUrl(url: string): string {
   return url.startsWith("/") ? `${API_BASE}${url}` : url;

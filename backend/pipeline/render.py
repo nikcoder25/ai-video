@@ -39,8 +39,7 @@ def _escape_filter_path(path: str | Path) -> str:
     text = str(path)
     text = text.replace("\\", "\\\\")
     text = text.replace(":", "\\:")
-    text = text.replace("'", "\\'")
-    return text
+    return text.replace("'", "\\'")
 
 
 def _bitrate_cap_kbps(duration: float, max_mb: int) -> int:

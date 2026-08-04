@@ -1,9 +1,10 @@
 "use client";
 
-import type { Clip, Job } from "@/lib/api";
+import { useState } from "react";
+import { deleteJob, messageFor, type Clip, type Job } from "@/lib/api";
 import { humanDuration } from "@/lib/format";
 import { ClipCard } from "./ClipCard";
-import { ArrowRightIcon, FilmIcon } from "./Icons";
+import { ArrowRightIcon, FilmIcon, TrashIcon } from "./Icons";
 
 export function ResultsView({
   job,
@@ -15,6 +16,28 @@ export function ResultsView({
   onReset: () => void;
 }) {
   const best = clips[0];
+  const [deleting, setDeleting] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  const handleDelete = async () => {
+    if (!confirming) {
+      // Two-step: first click arms, second click deletes. Cheaper than a
+      // modal and still impossible to trigger by accident.
+      setConfirming(true);
+      return;
+    }
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await deleteJob(job.id);
+      onReset();
+    } catch (caught) {
+      setDeleteError(messageFor(caught));
+      setDeleting(false);
+      setConfirming(false);
+    }
+  };
 
   return (
     <div className="anim-view py-12 lg:py-16">
@@ -36,14 +59,36 @@ export function ResultsView({
           </p>
         </div>
 
-        <button
-          type="button"
-          onClick={onReset}
-          className="group inline-flex h-11 shrink-0 items-center gap-2 rounded-xl border border-line bg-surface-2 px-5 text-sm font-medium text-fg transition-all duration-200 hover:border-flame/50 hover:bg-surface-3"
-        >
-          Start another
-          <ArrowRightIcon className="h-4 w-4 transition-transform duration-200 group-hover:translate-x-0.5" />
-        </button>
+        <div className="flex shrink-0 flex-col items-end gap-2">
+          <div className="flex items-center gap-2.5">
+            <button
+              type="button"
+              onClick={handleDelete}
+              onBlur={() => setConfirming(false)}
+              disabled={deleting}
+              aria-label={confirming ? "Confirm delete" : "Delete this job and its clips"}
+              className={`inline-flex h-11 items-center gap-2 rounded-xl border px-4 text-sm font-medium transition-all duration-200 disabled:opacity-50 ${
+                confirming
+                  ? "border-red-500/60 bg-red-500/10 text-red-300 hover:bg-red-500/20"
+                  : "border-line bg-surface-2 text-fg-muted hover:border-line hover:text-fg"
+              }`}
+            >
+              <TrashIcon className="h-4 w-4" />
+              {deleting ? "Deleting…" : confirming ? "Really delete?" : "Delete job"}
+            </button>
+
+            <button
+              type="button"
+              onClick={onReset}
+              className="group inline-flex h-11 items-center gap-2 rounded-xl border border-line bg-surface-2 px-5 text-sm font-medium text-fg transition-all duration-200 hover:border-flame/50 hover:bg-surface-3"
+            >
+              Start another
+              <ArrowRightIcon className="h-4 w-4 transition-transform duration-200 group-hover:translate-x-0.5" />
+            </button>
+          </div>
+
+          {deleteError ? <p className="text-xs text-red-400">{deleteError}</p> : null}
+        </div>
       </header>
 
       <p className="eyebrow mt-8 mb-6 text-fg-faint">Sorted by hook score</p>
