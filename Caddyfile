@@ -1,0 +1,31 @@
+{$SITE_ADDRESS::80} {
+	encode gzip
+
+	# Everything under /api belongs to FastAPI. The prefix is stripped so the
+	# backend keeps seeing its own routes (/jobs, /files, /health) unchanged.
+	handle /api/* {
+		uri strip_prefix /api
+		reverse_proxy backend:8000 {
+			# Uploads can be gigabytes and renders take minutes; the default
+			# 30s round-trip timeout would kill both.
+			transport http {
+				read_timeout 30m
+				write_timeout 30m
+			}
+		}
+	}
+
+	handle {
+		reverse_proxy frontend:3000
+	}
+
+	# 2 GB matches MAX_UPLOAD_MB; the backend also enforces it while streaming.
+	request_body {
+		max_size 2GB
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}

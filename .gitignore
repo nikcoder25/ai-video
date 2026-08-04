@@ -1,0 +1,33 @@
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# node
+node_modules/
+.next/
+out/
+next-env.d.ts
+
+# runtime data
+data/
+work/
+work-*/
+backend/work/
+backend/data/
+*.db
+*.db-journal
+*.sqlite3
+
+# secrets
+.env
+.env.local
+!.env.example
+
+# os
+.DS_Store
