@@ -97,7 +97,11 @@ class Settings:
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    origins = os.getenv("CORS_ORIGINS", "http://localhost:3000")
+    # Both spellings of loopback: a browser sent to 127.0.0.1 sends that as its
+    # Origin, and allowing only "localhost" silently fails every request.
+    origins = os.getenv(
+        "CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000"
+    )
     return Settings(
         deepgram_api_key=os.getenv("DEEPGRAM_API_KEY", "").strip(),
         anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", "").strip(),
