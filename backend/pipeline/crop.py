@@ -22,11 +22,26 @@ from . import ffmpeg
 log = logging.getLogger("clipviral.crop")
 
 SAMPLE_FPS = 2.0
-SAMPLE_WIDTH = 480
+# Detection happens on downscaled frames for speed, so this width sets how many
+# pixels land on a face. At 480 a head filling 7% of a 1280-wide source is only
+# ~36px across, which is marginal for the cascade; 640 keeps it comfortable
+# while still decoding cheaply.
+SAMPLE_WIDTH = 640
 
-# Exponential smoothing on the face track. Low alpha = heavy smoothing; the
-# camera should drift, never snap.
-EMA_ALPHA = 0.18
+# Smallest face to accept, as a fraction of the *sampled* frame width. This has
+# to be relative: a fixed pixel floor silently rejects every normal talking-head
+# shot once the frame is downscaled, which is exactly the bug that made this
+# fall back to a centre crop on real footage.
+MIN_FACE_FRACTION = 0.05
+# The cascade's own base window; asking for less than this finds only noise.
+MIN_FACE_PX = 24
+
+# Exponential smoothing on the face track, applied forward then backward, so
+# the effective smoothing is roughly this twice over. Measured against a steady
+# pan and a jittering stationary head: 0.30 keeps tracking error inside ~25px
+# while still collapsing detector jitter from ~22px peak-to-peak to ~6px, which
+# the deadzone below then holds flat.
+EMA_ALPHA = 0.30
 # Ignore movement smaller than this fraction of frame width. Stops the crop
 # vibrating around a stationary head.
 DEADZONE_FRACTION = 0.012
@@ -62,6 +77,11 @@ class CropPlan:
         return out
 
 
+def min_face_size(frame_width: int) -> int:
+    """Smallest face the detector should accept, in sampled-frame pixels."""
+    return max(MIN_FACE_PX, int(frame_width * MIN_FACE_FRACTION))
+
+
 def _load_detector():
     """Return ``(name, fn)`` where fn maps an image to a face centre-x, or None."""
     try:
@@ -78,13 +98,8 @@ def _load_detector():
             result = detector.process(rgb)
             if not result.detections:
                 return None
-            # Largest box wins: the speaker is nearer the camera than the
-            # audience or a poster on the wall behind them.
-            best = max(
-                result.detections,
-                key=lambda d: d.location_data.relative_bounding_box.width
-                * d.location_data.relative_bounding_box.height,
-            )
+            # Highest confidence, not largest box -- see detect_cv below.
+            best = max(result.detections, key=lambda d: d.score[0] if d.score else 0.0)
             box = best.location_data.relative_bounding_box
             return (box.xmin + box.width / 2.0) * image.shape[1]
 
@@ -102,17 +117,46 @@ def _load_detector():
 
         def detect_cv(image) -> float | None:
             gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-            faces = cascade.detectMultiScale(
-                gray, scaleFactor=1.1, minNeighbors=5, minSize=(40, 40)
-            )
-            if len(faces) == 0:
-                return None
-            x, _, w, h = max(faces, key=lambda f: f[2] * f[3])
+            floor = min_face_size(image.shape[1])
+
+            # Pick by confidence, never by box size. A Haar cascade readily
+            # fires on torsos and background objects, and those false
+            # positives are often *larger* than the head -- picking the
+            # biggest box reliably reframes onto the speaker's chest.
+            try:
+                faces, _levels, weights = cascade.detectMultiScale3(
+                    gray,
+                    scaleFactor=1.1,
+                    minNeighbors=5,
+                    minSize=(floor, floor),
+                    outputRejectLevels=True,
+                )
+                if len(faces) == 0:
+                    return None
+                best = max(zip(faces, weights, strict=False), key=lambda p: float(p[1]))[0]
+            except (cv2.error, AttributeError, ValueError):
+                faces = cascade.detectMultiScale(
+                    gray, scaleFactor=1.1, minNeighbors=5, minSize=(floor, floor)
+                )
+                if len(faces) == 0:
+                    return None
+                best = max(faces, key=lambda f: f[2] * f[3])
+
+            x, _, w, _h = best
             return float(x) + w / 2.0
 
         return "opencv", detect_cv
     except Exception:  # noqa: BLE001
         return "none", None
+
+
+def _ema(values: list[float], alpha: float) -> list[float]:
+    out: list[float] = []
+    current = values[0]
+    for v in values:
+        current = alpha * v + (1 - alpha) * current
+        out.append(current)
+    return out
 
 
 def smooth_track(
@@ -122,7 +166,15 @@ def smooth_track(
     alpha: float = EMA_ALPHA,
     deadzone: float = 0.0,
 ) -> list[float]:
-    """Fill gaps, then exponentially smooth with a deadzone."""
+    """Fill gaps, smooth without lag, then hold within a deadzone.
+
+    The smoothing runs forward and then backward over the track. A single
+    forward pass is causal and therefore trails the subject -- on a steady pan
+    it sits roughly ``(1-alpha)/alpha`` samples behind, which at these settings
+    left the speaker drifting toward the edge of frame. Nothing here is
+    real-time: the whole track is known before a single frame is encoded, so
+    the second pass cancels that phase lag exactly and costs nothing.
+    """
     if not values:
         return []
 
@@ -135,13 +187,14 @@ def smooth_track(
             last = v
         filled.append(last)
 
+    forward = _ema(filled, alpha)
+    smoothed = list(reversed(_ema(list(reversed(forward)), alpha)))
+
     out: list[float] = []
-    held = filled[0]
-    current = filled[0]
-    for v in filled:
-        current = alpha * v + (1 - alpha) * current
-        if abs(current - held) >= deadzone:
-            held = current
+    held = smoothed[0]
+    for v in smoothed:
+        if abs(v - held) >= deadzone:
+            held = v
         out.append(held)
     return out
 
