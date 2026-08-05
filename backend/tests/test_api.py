@@ -48,6 +48,13 @@ class TestCreateJob:
         response = client.post("/jobs", json={"youtube_url": "file:///etc/passwd"})
         assert response.status_code == 400
 
+    def test_rejects_an_internal_host(self, client):
+        # Whatever reaches this endpoint is handed to yt-dlp, which will fetch
+        # anything the container can reach. test_source_url.py covers the rule
+        # itself; this checks the route is actually wired to it.
+        response = client.post("/jobs", json={"youtube_url": "http://169.254.169.254/latest/"})
+        assert response.status_code == 400
+
     def test_rejects_an_unknown_content_type(self, client):
         response = client.post("/jobs", content="raw", headers={"Content-Type": "text/plain"})
         assert response.status_code == 415
@@ -75,19 +82,19 @@ class TestReadJob:
         assert client.get("/jobs/does-not-exist/clips").status_code == 404
 
     def test_round_trips_a_created_job(self, client):
-        job_id = client.post("/jobs", json={"youtube_url": "https://x.com/v"}).json()["id"]
+        job_id = client.post("/jobs", json={"youtube_url": "https://youtube.com/watch?v=aaa"}).json()["id"]
 
         response = client.get(f"/jobs/{job_id}")
         assert response.status_code == 200
         assert response.json()["id"] == job_id
 
     def test_new_job_has_no_clips(self, client):
-        job_id = client.post("/jobs", json={"youtube_url": "https://x.com/v"}).json()["id"]
+        job_id = client.post("/jobs", json={"youtube_url": "https://youtube.com/watch?v=aaa"}).json()["id"]
         assert client.get(f"/jobs/{job_id}/clips").json() == []
 
     def test_listing_is_newest_first(self, client):
-        first = client.post("/jobs", json={"youtube_url": "https://x.com/1"}).json()["id"]
-        second = client.post("/jobs", json={"youtube_url": "https://x.com/2"}).json()["id"]
+        first = client.post("/jobs", json={"youtube_url": "https://youtube.com/watch?v=one"}).json()["id"]
+        second = client.post("/jobs", json={"youtube_url": "https://youtube.com/watch?v=two"}).json()["id"]
 
         ids = [j["id"] for j in client.get("/jobs?limit=50").json()]
         assert ids.index(second) < ids.index(first)
@@ -119,7 +126,7 @@ class TestDeleteJob:
         from config import get_settings
         from storage import get_storage
 
-        job_id = client.post("/jobs", json={"youtube_url": "https://x.com/v"}).json()["id"]
+        job_id = client.post("/jobs", json={"youtube_url": "https://youtube.com/watch?v=aaa"}).json()["id"]
 
         # Simulate what a finished job leaves on disk.
         storage = get_storage()
@@ -140,7 +147,7 @@ class TestDeleteJob:
     def test_delete_cascades_to_clip_rows(self, client):
         from models import Clip
 
-        job_id = client.post("/jobs", json={"youtube_url": "https://x.com/v"}).json()["id"]
+        job_id = client.post("/jobs", json={"youtube_url": "https://youtube.com/watch?v=aaa"}).json()["id"]
         with session_scope() as session:
             session.add(
                 Clip(

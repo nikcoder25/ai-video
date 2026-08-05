@@ -25,6 +25,7 @@ from config import get_settings
 from models import Clip, Job, init_db, new_id, session_scope
 from pipeline.run import cleanup_work, overall_progress, run_job
 from schemas import ClipOut, JobOut, JobStatus, RenderedClip, Stage
+from source_url import InvalidSourceUrl, normalize_source_url
 from storage import LocalStorage, get_storage
 
 log = logging.getLogger("clipviral.api")
@@ -35,9 +36,10 @@ settings = get_settings()
 # every concurrent job slower rather than any of them finish sooner.
 RENDER_SLOTS = threading.Semaphore(1)
 
-SAFE_NAME = re.compile(r"^[A-Za-z0-9._-]+$")
+# No `.` on its own: the class already contains it, so a bare `..` matched and
+# the only thing stopping traversal was the containment check below it.
+SAFE_NAME = re.compile(r"^(?!\.+$)[A-Za-z0-9._-]+$")
 VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi"}
-URL_PATTERN = re.compile(r"^https?://", re.IGNORECASE)
 
 
 @asynccontextmanager
@@ -84,6 +86,21 @@ def _fail_orphaned_jobs() -> None:
 # --- job execution ----------------------------------------------------------
 
 
+def _mark_failed(job_id: str, message: str) -> None:
+    """Move a job to a terminal state. Never raises -- the caller is already
+    handling one failure and a second would leave the job stuck ``running``."""
+    try:
+        with session_scope() as session:
+            job = session.get(Job, job_id)
+            if job is not None:
+                job.status = JobStatus.FAILED
+                job.stage = Stage.FAILED
+                job.error = message[:1000]
+                job.updated_at = datetime.now(UTC)
+    except Exception:  # noqa: BLE001
+        log.exception("could not record failure for job %s", job_id)
+
+
 def _process_job(job_id: str) -> None:
     settings = get_settings()
     work_dir = settings.work_dir / job_id
@@ -120,6 +137,10 @@ def _process_job(job_id: str) -> None:
         title = job.source_title
 
     with RENDER_SLOTS:
+        # The result write is inside this block too. If it were outside, a
+        # failure there (disk full, database locked) would leave the job stuck
+        # in `running` forever: the poller never stops and DELETE returns 409
+        # until someone restarts the process.
         try:
             result = run_job(
                 work_dir=work_dir,
@@ -132,13 +153,7 @@ def _process_job(job_id: str) -> None:
             )
         except Exception as exc:  # noqa: BLE001 - surfaced to the client
             log.exception("job %s failed", job_id)
-            with session_scope() as session:
-                job = session.get(Job, job_id)
-                if job is not None:
-                    job.status = JobStatus.FAILED
-                    job.stage = Stage.FAILED
-                    job.error = str(exc)[:1000]
-                    job.updated_at = datetime.now(UTC)
+            _mark_failed(job_id, str(exc))
             # A failed job's partial downloads and renders are unreachable by
             # the user (clips are served from storage, not the work dir), so
             # only KEEP_WORK justifies keeping gigabytes of them.
@@ -146,33 +161,38 @@ def _process_job(job_id: str) -> None:
                 cleanup_work(work_dir, remove_clips=True)
             return
 
-    with session_scope() as session:
-        job = session.get(Job, job_id)
-        if job is None:
+        try:
+            with session_scope() as session:
+                job = session.get(Job, job_id)
+                if job is None:
+                    return
+                job.source_title = result.source.title
+                job.duration = result.source.duration
+                for clip in result.clips:
+                    session.add(
+                        Clip(
+                            id=new_id(),
+                            job_id=job_id,
+                            title=clip.candidate.title,
+                            hook_score=clip.candidate.hook_score,
+                            reason=clip.candidate.reason,
+                            start=clip.candidate.start,
+                            end=clip.candidate.end,
+                            url=result.urls.get(clip.index, ""),
+                            size_bytes=clip.size_bytes,
+                            width=clip.width,
+                            height=clip.height,
+                            index=clip.index,
+                        )
+                    )
+                job.status = JobStatus.DONE
+                job.stage = Stage.DONE
+                job.progress = 1.0
+                job.updated_at = datetime.now(UTC)
+        except Exception as exc:  # noqa: BLE001 - must not leave the job running
+            log.exception("job %s rendered but could not be recorded", job_id)
+            _mark_failed(job_id, f"clips rendered but could not be saved: {exc}")
             return
-        job.source_title = result.source.title
-        job.duration = result.source.duration
-        for clip in result.clips:
-            session.add(
-                Clip(
-                    id=new_id(),
-                    job_id=job_id,
-                    title=clip.candidate.title,
-                    hook_score=clip.candidate.hook_score,
-                    reason=clip.candidate.reason,
-                    start=clip.candidate.start,
-                    end=clip.candidate.end,
-                    url=result.urls.get(clip.index, ""),
-                    size_bytes=clip.size_bytes,
-                    width=clip.width,
-                    height=clip.height,
-                    index=clip.index,
-                )
-            )
-        job.status = JobStatus.DONE
-        job.stage = Stage.DONE
-        job.progress = 1.0
-        job.updated_at = datetime.now(UTC)
 
     log.info("job %s done: %d clips", job_id, len(result.clips))
 
@@ -199,10 +219,13 @@ async def create_job(request: Request, background: BackgroundTasks) -> JobOut:
             payload = await request.json()
         except Exception:  # noqa: BLE001
             raise HTTPException(400, "Body was not valid JSON") from None
-        source_url = (payload or {}).get("youtube_url") or (payload or {}).get("url")
-        if not source_url or not URL_PATTERN.match(str(source_url)):
-            raise HTTPException(400, "Provide a http(s) URL in `youtube_url`")
-        source_url = str(source_url).strip()
+        raw_url = (payload or {}).get("youtube_url") or (payload or {}).get("url")
+        if not raw_url or not isinstance(raw_url, str):
+            raise HTTPException(400, "Provide a YouTube URL in `youtube_url`")
+        try:
+            source_url = normalize_source_url(raw_url)
+        except InvalidSourceUrl as exc:
+            raise HTTPException(400, str(exc)) from None
 
     elif content_type.startswith("multipart/form-data"):
         form = await request.form()

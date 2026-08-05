@@ -59,6 +59,7 @@ class Settings:
     database_url: str
     work_dir: Path
     max_upload_mb: int
+    max_source_sec: float
     cors_origins: tuple[str, ...]
 
     mock: bool
@@ -78,6 +79,10 @@ class Settings:
     @property
     def uses_r2(self) -> bool:
         return self.storage_backend.lower() == "r2"
+
+    @property
+    def max_source_bytes(self) -> int:
+        return self.max_upload_mb * 1_048_576
 
     def require_deepgram(self) -> str:
         if not self.deepgram_api_key:
@@ -117,6 +122,10 @@ def get_settings() -> Settings:
         database_url=os.getenv("DATABASE_URL", "sqlite:///./data/clipviral.db"),
         work_dir=_path("WORK_DIR", "./work"),
         max_upload_mb=int(_num("MAX_UPLOAD_MB", 2048)),
+        # Transcription and selection are both billed per minute of source, and
+        # the render slot is single-file, so an unbounded source is unbounded
+        # spend and an unbounded queue. Four hours covers any real podcast.
+        max_source_sec=_num("MAX_SOURCE_SEC", 4 * 3600),
         cors_origins=tuple(o.strip() for o in origins.split(",") if o.strip()),
         mock=_flag("MOCK"),
         keep_work=_flag("KEEP_WORK"),

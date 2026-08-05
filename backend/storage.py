@@ -51,13 +51,13 @@ class LocalStorage(Storage):
     def local_path(self, key: str) -> Path | None:
         candidate = (self.root / key).resolve()
         # Guard against a crafted key climbing out of the storage root.
-        if not str(candidate).startswith(str(self.root.resolve())):
+        if not candidate.is_relative_to(self.root.resolve()):
             return None
         return candidate if candidate.is_file() else None
 
     def delete_prefix(self, prefix: str) -> int:
         target = (self.root / prefix).resolve()
-        if not str(target).startswith(str(self.root.resolve())) or not target.is_dir():
+        if not target.is_relative_to(self.root.resolve()) or not target.is_dir():
             return 0
         count = sum(1 for f in target.rglob("*") if f.is_file())
         shutil.rmtree(target, ignore_errors=True)

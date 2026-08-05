@@ -183,12 +183,34 @@ def run_job(
     )
     report(Stage.RENDERING, 1.0)
 
+    # render_clips swallows per-clip failures so one bad cut cannot lose the
+    # others. Losing *all* of them is a different thing and must not be
+    # reported as a finished job with nothing in it -- that is indistinguishable
+    # from "no moment cleared the bar", which is a legitimate result.
+    if keepers and not result.clips:
+        raise RuntimeError(
+            f"all {len(keepers)} clips failed to render; see the ffmpeg errors above"
+        )
+
     # --- upload -----------------------------------------------------------
     if uploader and result.clips:
         report(Stage.UPLOADING, 0.0)
+        failed_uploads = 0
         for i, clip in enumerate(result.clips, start=1):
-            result.urls[clip.index] = uploader(clip)
+            # A transient storage error on clip 7 must not throw away clips 1-6,
+            # which are already uploaded and are the expensive part of the job.
+            try:
+                result.urls[clip.index] = uploader(clip)
+            except Exception:  # noqa: BLE001 - backend-specific, all recoverable
+                failed_uploads += 1
+                log.exception("uploading clip %d failed, continuing", clip.index)
             report(Stage.UPLOADING, i / len(result.clips))
+
+        if failed_uploads == len(result.clips):
+            raise RuntimeError(f"none of the {failed_uploads} clips could be uploaded")
+        if failed_uploads:
+            log.warning("%d of %d clips failed to upload", failed_uploads, len(result.clips))
+            result.clips = [c for c in result.clips if c.index in result.urls]
     report(Stage.UPLOADING, 1.0)
 
     # Server jobs clean up after themselves; CLI runs (no uploader) keep

@@ -373,25 +373,44 @@ def _windows(duration: float) -> list[tuple[float, float]]:
     return out
 
 
+# Room for the model to think before it answers. Current models reason
+# adaptively unless told not to, and max_tokens caps thinking *and* the tool
+# call together -- so a budget sized only for the answer lets the reasoning eat
+# it and the response comes back truncated with no tool call at all. The clips
+# themselves need about 1k tokens; the rest of this is headroom for thinking.
+MAX_OUTPUT_TOKENS = 16000
+
+
 def _call_model(prompt: str, *, model: str, api_key: str) -> list[dict]:
     from anthropic import Anthropic
 
     client = Anthropic(api_key=api_key)
     message = client.messages.create(
         model=model,
-        max_tokens=4096,
+        max_tokens=MAX_OUTPUT_TOKENS,
         system=SYSTEM_PROMPT,
         tools=[CLIP_TOOL],
         tool_choice={"type": "tool", "name": "propose_clips"},
         messages=[{"role": "user", "content": prompt}],
     )
 
+    # A truncated response silently loses the tool call. Without this the job
+    # reports success having selected nothing, which reads as "no good moments
+    # in this video" -- the one failure that looks exactly like a valid result.
+    if message.stop_reason == "max_tokens":
+        raise RuntimeError(
+            f"model response hit the {MAX_OUTPUT_TOKENS}-token limit before finishing; "
+            "raise MAX_OUTPUT_TOKENS or shorten the window"
+        )
+
     for block in message.content:
         if getattr(block, "type", None) == "tool_use" and block.name == "propose_clips":
             clips = block.input.get("clips", [])
             if isinstance(clips, list):
                 return clips
-    raise RuntimeError("model returned no propose_clips tool call")
+    raise RuntimeError(
+        f"model returned no propose_clips tool call (stop_reason={message.stop_reason})"
+    )
 
 
 def select(
@@ -418,10 +437,13 @@ def select(
     per_window = max(4, -(-target // len(windows)))  # ceil
 
     raw: list[dict] = []
+    attempted_windows = 0
+    failed_windows = 0
     for i, (w_start, w_end) in enumerate(windows):
         words = transcript.words_between(w_start, w_end)
         if len(words) < 40:
             continue
+        attempted_windows += 1
         prompt = build_user_prompt(
             words,
             target_count=per_window,
@@ -438,9 +460,27 @@ def select(
             w_end,
             len(words),
         )
-        raw.extend(_call_model(prompt, model=settings.select_model, api_key=api_key))
+        # One window failing must not discard the others, nor the download and
+        # transcription already paid for. Nine good windows out of ten is a
+        # usable result; re-running the whole job is not.
+        try:
+            raw.extend(_call_model(prompt, model=settings.select_model, api_key=api_key))
+        except Exception:  # noqa: BLE001 - any API failure, not just SDK errors
+            failed_windows += 1
+            log.exception("window %d/%d failed, continuing", i + 1, len(windows))
         if on_progress:
             on_progress((i + 1) / len(windows))
+
+    if failed_windows and failed_windows == attempted_windows:
+        raise RuntimeError(
+            f"every one of the {attempted_windows} selection requests failed; see the log"
+        )
+    if failed_windows:
+        log.warning(
+            "%d of %d windows failed; selecting from the rest",
+            failed_windows,
+            attempted_windows,
+        )
 
     candidates = validate_candidates(raw, transcript, min_sec=min_sec, max_sec=max_sec)
     log.info("kept %d of %d proposed candidates", len(candidates), len(raw))
