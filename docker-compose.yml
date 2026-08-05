@@ -13,6 +13,12 @@ services:
     expose:
       - "8000"
     restart: unless-stopped
+    # Without a limit the kernel's OOM killer picks a victim from every process
+    # on the box -- usually this one, since it holds OpenCV, but sometimes Caddy
+    # or the frontend. A per-container cap means a runaway render restarts
+    # itself instead of taking the machine down.
+    mem_limit: 3g
+    memswap_limit: 3g
 
   frontend:
     build:
@@ -26,6 +32,7 @@ services:
     depends_on:
       - backend
     restart: unless-stopped
+    mem_limit: 512m
 
   caddy:
     image: caddy:2-alpine

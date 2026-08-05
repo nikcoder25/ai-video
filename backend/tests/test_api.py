@@ -6,6 +6,8 @@ request validation, error shapes and the job lifecycle around it.
 
 from __future__ import annotations
 
+import threading
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -21,6 +23,24 @@ def client(monkeypatch):
     init_db()
     with TestClient(main.app) as c:
         yield c
+
+
+@pytest.fixture
+def blocked_queue(monkeypatch):
+    """Hold every submitted job open so the queue actually fills up.
+
+    Request this *after* ``client``: the client fixture patches ``_process_job``
+    too, and whichever runs last wins.
+    """
+    gate = threading.Event()
+    monkeypatch.setattr(main, "_process_job", lambda job_id: gate.wait(10))
+    yield gate
+    gate.set()
+    # The counter is module state and the releases happen on the pool thread,
+    # so leaving it to drain on its own would bleed into the next test.
+    main.shutdown_job_pool()
+    with main._queue_lock:
+        main._queued = 0
 
 
 class TestHealth:
@@ -54,6 +74,40 @@ class TestCreateJob:
         # itself; this checks the route is actually wired to it.
         response = client.post("/jobs", json={"youtube_url": "http://169.254.169.254/latest/"})
         assert response.status_code == 400
+
+    def test_a_full_queue_is_refused_rather_than_promised(self, client, blocked_queue):
+        # Jobs render one at a time, so an unbounded queue means accepting work
+        # that will not start for days while still answering 201.
+        from config import get_settings
+
+        limit = get_settings().max_queued_jobs
+        body = {"youtube_url": "https://youtube.com/watch?v=abc"}
+
+        accepted = [client.post("/jobs", json=body).status_code for _ in range(limit)]
+        assert accepted == [201] * limit
+
+        overflow = client.post("/jobs", json=body)
+        assert overflow.status_code == 503
+
+    def test_a_rejected_submission_does_not_consume_a_slot(self, client, blocked_queue):
+        # Otherwise a client sending bad requests permanently shrinks the queue.
+        from config import get_settings
+
+        for _ in range(get_settings().max_queued_jobs + 5):
+            assert client.post("/jobs", json={"youtube_url": "nope"}).status_code == 400
+
+        good = client.post("/jobs", json={"youtube_url": "https://youtube.com/watch?v=abc"})
+        assert good.status_code == 201
+
+    def test_an_oversized_json_body_is_refused_before_it_is_parsed(self, client):
+        # request.json() buffers the whole body in memory, so without a cap a
+        # single POST sets the process's resident set.
+        payload = {"youtube_url": "https://youtube.com/watch?v=abc", "pad": "x" * 200_000}
+        assert client.post("/jobs", json=payload).status_code == 413
+
+    def test_a_normal_json_body_still_passes(self, client):
+        response = client.post("/jobs", json={"youtube_url": "https://youtube.com/watch?v=abc"})
+        assert response.status_code == 201
 
     def test_rejects_an_unknown_content_type(self, client):
         response = client.post("/jobs", content="raw", headers={"Content-Type": "text/plain"})

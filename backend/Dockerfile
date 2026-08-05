@@ -28,13 +28,21 @@ ENV PYTHONUNBUFFERED=1 \
     STORAGE_DIR=/data/clips \
     DATABASE_URL=sqlite:////data/clipviral.db
 
-RUN mkdir -p /data/work /data/clips
+# ffmpeg, ffprobe and yt-dlp all parse bytes chosen by whoever submitted the
+# job, and media demuxers are a classic memory-corruption surface. Running them
+# as root puts the database and every user's clips one parser bug away; as a
+# non-root user the blast radius is the data this app already owns.
+RUN useradd --create-home --uid 10001 clipviral \
+    && mkdir -p /data/work /data/clips \
+    && chown -R clipviral:clipviral /data /app
+USER clipviral
 
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD curl -fsS http://localhost:8000/health || exit 1
 
-# Single worker on purpose: renders are CPU-bound and serialised by a semaphore
-# inside the process. More workers would multiply memory without adding throughput.
+# Single worker on purpose, and load-bearing: the job queue and its counter are
+# per-process, so a second worker would render concurrently, ignore the queue
+# bound, and mark the other worker's live jobs as orphaned at boot.
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

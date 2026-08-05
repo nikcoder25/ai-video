@@ -60,6 +60,7 @@ class Settings:
     work_dir: Path
     max_upload_mb: int
     max_source_sec: float
+    max_queued_jobs: int
     cors_origins: tuple[str, ...]
 
     mock: bool
@@ -126,6 +127,9 @@ def get_settings() -> Settings:
         # the render slot is single-file, so an unbounded source is unbounded
         # spend and an unbounded queue. Four hours covers any real podcast.
         max_source_sec=_num("MAX_SOURCE_SEC", 4 * 3600),
+        # Jobs render one at a time, so the queue is the backlog. Past this,
+        # submissions are refused rather than promising a slot hours away.
+        max_queued_jobs=int(_num("MAX_QUEUED_JOBS", 20)),
         cors_origins=tuple(o.strip() for o in origins.split(",") if o.strip()),
         mock=_flag("MOCK"),
         keep_work=_flag("KEEP_WORK"),

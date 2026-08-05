@@ -22,6 +22,8 @@ export interface JobPollingState {
   /** Last stage seen before a failure, so the step list can point at it. */
   lastActiveStage: JobStage | null;
   error: string | null;
+  /** The job id doesn't exist any more — deleted, or from an older database. */
+  notFound: boolean;
   retry: () => void;
 }
 
@@ -38,11 +40,13 @@ export function useJobPolling(jobId: string | null): JobPollingState {
   const [job, setJob] = useState<Job | null>(null);
   const [clips, setClips] = useState<Clip[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notFound, setNotFound] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const lastActiveStage = useRef<JobStage | null>(null);
 
   const retry = useCallback(() => {
     setError(null);
+    setNotFound(false);
     setAttempt((value) => value + 1);
   }, []);
 
@@ -51,6 +55,7 @@ export function useJobPolling(jobId: string | null): JobPollingState {
     setJob(null);
     setClips(null);
     setError(null);
+    setNotFound(false);
     lastActiveStage.current = null;
   }, [jobId]);
 
@@ -87,6 +92,13 @@ export function useJobPolling(jobId: string | null): JobPollingState {
         if (cancelled) return;
         if (caught instanceof ApiError && caught.kind === "aborted") return;
 
+        // A 404 is settled, not flaky. Retrying it two more times just delays
+        // telling the caller that this id is gone.
+        if (caught instanceof ApiError && caught.status === 404) {
+          setNotFound(true);
+          return;
+        }
+
         failures += 1;
         if (failures >= MAX_CONSECUTIVE_FAILURES) {
           setError(messageFor(caught));
@@ -109,5 +121,5 @@ export function useJobPolling(jobId: string | null): JobPollingState {
     };
   }, [jobId, attempt]);
 
-  return { job, clips, lastActiveStage: lastActiveStage.current, error, retry };
+  return { job, clips, lastActiveStage: lastActiveStage.current, error, notFound, retry };
 }
