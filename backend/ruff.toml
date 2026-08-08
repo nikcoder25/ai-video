@@ -1,0 +1,10 @@
+line-length = 100
+target-version = "py311"
+
+[lint]
+select = ["E", "F", "W", "B", "UP", "SIM", "RET"]
+
+[lint.per-file-ignores]
+# The ASS style header must be a single line -- the format is line-oriented
+# and breaking it changes the file's meaning.
+"pipeline/captions.py" = ["E501"]

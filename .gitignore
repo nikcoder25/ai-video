@@ -1,8 +1,41 @@
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# node
 node_modules/
+.next/
 out/
-public/jobs/
+next-env.d.ts
+
+# runtime data
+data/
+work/
+work-*/
+backend/work/
+backend/data/
+*.db
+*.db-journal
+*.sqlite3
+
+# secrets
 .env
-*.log
+.env.local
+!.env.example
+
+# os
 .DS_Store
-.remotion/
-dist/
+
+# generated media
+# Demo/tour recordings are rebuilt from the app whenever they are needed, and
+# the project already avoids multi-megabyte binaries in git for the same reason
+# pipeline/download.py synthesises its fixture video instead of checking one in.
+*.mp4
+*.webm
+!backend/tests/fixtures/*.mp4

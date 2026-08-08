@@ -1,0 +1,75 @@
+services:
+  backend:
+    build: ./backend
+    env_file: .env
+    environment:
+      # Overrides .env so the container writes to its volume, not the repo.
+      WORK_DIR: /data/work
+      STORAGE_DIR: /data/clips
+      DATABASE_URL: sqlite:////data/clipviral.db
+      CORS_ORIGINS: ${SITE_ORIGIN:-http://localhost}
+    volumes:
+      - clipviral-data:/data
+    expose:
+      - "8000"
+    restart: unless-stopped
+    # Without a limit the kernel's OOM killer picks a victim from every process
+    # on the box -- usually this one, since it holds OpenCV, but sometimes Caddy
+    # or the frontend. A per-container cap means a runaway render restarts
+    # itself instead of taking the machine down.
+    mem_limit: 3g
+    memswap_limit: 3g
+    # Docker's default json-file driver never rotates, and this app logs a full
+    # ffmpeg command line per clip. Left alone it is a third way to fill the
+    # disk, alongside work dirs and uploads.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # Next.js inlines NEXT_PUBLIC_* at build time, so this must be a build
+        # arg. Caddy strips /api before proxying to the backend.
+        NEXT_PUBLIC_API_BASE: /api
+    expose:
+      - "3000"
+    depends_on:
+      - backend
+    restart: unless-stopped
+    mem_limit: 512m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      # Set to your domain for automatic HTTPS; defaults to plain local HTTP.
+      SITE_ADDRESS: ${SITE_ADDRESS:-:80}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - backend
+      - frontend
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  clipviral-data:
+  caddy-data:
+  caddy-config:

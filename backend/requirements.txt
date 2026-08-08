@@ -1,0 +1,20 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+python-dotenv==1.0.1
+pydantic==2.10.4
+sqlalchemy==2.0.36
+httpx==0.28.1
+anthropic==0.42.0
+# Deliberately unpinned: YouTube changes break yt-dlp regularly and the fix is
+# always "upgrade". A pin here turns a working deploy into a broken one.
+yt-dlp>=2025.1.1
+boto3==1.35.87
+
+# Face detection for the 9:16 crop. Degrades to a static centre crop if absent,
+# so the pipeline still runs without it -- see pipeline/crop.py.
+opencv-python-headless==4.10.0.84
+
+# Optional, better face tracking than the OpenCV cascade. Install separately:
+#   pip install mediapipe
+# crop.py prefers it when importable.
