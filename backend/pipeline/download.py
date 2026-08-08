@@ -118,13 +118,24 @@ def download(
 
     import yt_dlp  # imported lazily so MOCK runs need no yt-dlp install
 
+    # A merged download is two files -- video, then audio -- and yt-dlp reports
+    # each from 0 to 100% separately. Reporting them raw sends the bar back to
+    # zero partway through, which CLAUDE.md's Job contract forbids (progress is
+    # monotonic) and which reads as "it restarted" to anyone watching.
+    seen_high = 0.0
+
     def hook(d: dict) -> None:
+        nonlocal seen_high
         if not on_progress or d.get("status") != "downloading":
             return
         total = d.get("total_bytes") or d.get("total_bytes_estimate")
         got = d.get("downloaded_bytes")
-        if total and got:
-            on_progress(min(0.99, got / total))
+        if not total or not got:
+            return
+        fraction = min(0.99, got / total)
+        if fraction > seen_high:
+            seen_high = fraction
+            on_progress(fraction)
 
     out_tmpl = str(work / "source.%(ext)s")
     opts = {

@@ -7,6 +7,7 @@ them to find sentence boundaries, captions read them for per-word sync.
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -33,6 +34,11 @@ DEEPGRAM_PARAMS = {
     "filler_words": "false",
 }
 
+# The Anthropic SDK retries on its own; httpx does not, so this side needs it
+# explicitly or selection gets three attempts and transcription gets one.
+MAX_ATTEMPTS = 3
+RETRY_BASE_DELAY = 2.0
+
 
 def transcribe(
     audio_path: str | Path,
@@ -56,27 +62,7 @@ def transcribe(
     if on_progress:
         on_progress(0.05)
 
-    # Streamed from disk rather than read into memory -- an hour of 16kHz mono
-    # wav is ~115 MB and this may be one of several concurrent jobs.
-    with path.open("rb") as fh:
-        try:
-            response = httpx.post(
-                DEEPGRAM_URL,
-                params=DEEPGRAM_PARAMS,
-                headers={
-                    "Authorization": f"Token {api_key}",
-                    "Content-Type": "audio/wav",
-                },
-                content=fh,
-                timeout=httpx.Timeout(30.0, read=900.0, write=900.0),
-            )
-        except httpx.HTTPError as exc:
-            raise RuntimeError(f"Deepgram request failed: {exc}") from exc
-
-    if response.status_code != 200:
-        raise RuntimeError(
-            f"Deepgram returned {response.status_code}: {response.text[:400]}"
-        )
+    response = _post_with_retry(path, api_key=api_key)
 
     if on_progress:
         on_progress(0.9)
@@ -87,6 +73,57 @@ def transcribe(
     if on_progress:
         on_progress(1.0)
     return transcript
+
+
+def _post_with_retry(path: Path, *, api_key: str) -> httpx.Response:
+    """Upload the audio, retrying transient failures.
+
+    Worth retrying because of what has already been spent by this point: the
+    source video is downloaded and the wav extracted, and the failure path
+    deletes both. A single 502 would otherwise cost the whole job and make the
+    user re-download a two-hour podcast. Only transient classes are retried --
+    a bad key or a rejected file fails immediately, since repeating it just
+    delays the same answer.
+    """
+    last: Exception | None = None
+
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        try:
+            with path.open("rb") as fh:
+                response = httpx.post(
+                    DEEPGRAM_URL,
+                    params=DEEPGRAM_PARAMS,
+                    headers={
+                        "Authorization": f"Token {api_key}",
+                        "Content-Type": "audio/wav",
+                    },
+                    content=fh,
+                    timeout=httpx.Timeout(30.0, read=900.0, write=900.0),
+                )
+        except httpx.HTTPError as exc:
+            last = RuntimeError(f"Deepgram request failed: {exc}")
+        else:
+            if response.status_code == 200:
+                return response
+            last = RuntimeError(
+                f"Deepgram returned {response.status_code}: {response.text[:400]}"
+            )
+            # 4xx other than rate limiting is a rejection, not a blip.
+            if response.status_code < 500 and response.status_code != 429:
+                raise last
+
+        if attempt < MAX_ATTEMPTS:
+            delay = RETRY_BASE_DELAY * (2 ** (attempt - 1))
+            log.warning(
+                "Deepgram attempt %d/%d failed (%s); retrying in %.0fs",
+                attempt,
+                MAX_ATTEMPTS,
+                last,
+                delay,
+            )
+            time.sleep(delay)
+
+    raise last if last else RuntimeError("Deepgram request failed")
 
 
 def parse_deepgram(payload: dict) -> Transcript:

@@ -179,3 +179,44 @@ class TestWindowing:
         # Consecutive windows must overlap so a moment on a seam is still seen whole.
         for earlier, later in zip(windows, windows[1:], strict=False):
             assert later[0] < earlier[1]
+
+
+class TestWindowBounds:
+    """A windowed request must only yield clips from inside that window.
+
+    Each window sees only its slice of transcript but is told the absolute
+    times. If the model answers relative to the slice, the number is still a
+    valid timestamp elsewhere in the source -- it snaps cleanly and renders the
+    wrong moment with no error anywhere.
+    """
+
+    def test_keeps_candidates_inside_the_window(self):
+        from pipeline.select import _within_window
+
+        clips = [{"start": 2500.0, "end": 2540.0}]
+        assert _within_window(clips, 2400.0, 4800.0) == clips
+
+    def test_drops_a_window_relative_answer(self):
+        from pipeline.select import _within_window
+
+        # "120" meaning two minutes into this section, not into the source.
+        clips = [{"start": 120.0, "end": 160.0}]
+        assert _within_window(clips, 2400.0, 4800.0) == []
+
+    def test_drops_a_candidate_running_past_the_window_end(self):
+        from pipeline.select import _within_window
+
+        assert _within_window([{"start": 4700.0, "end": 5200.0}], 2400.0, 4800.0) == []
+
+    def test_tolerates_rounding_at_the_edges(self):
+        from pipeline.select import _within_window
+
+        clips = [{"start": 2399.0, "end": 4801.0}]
+        assert _within_window(clips, 2400.0, 4800.0) == clips
+
+    def test_passes_malformed_entries_through_to_validation(self):
+        # Dropping them here would lose the "dropping malformed candidate" log.
+        from pipeline.select import _within_window
+
+        clips = [{"start": "abc"}]
+        assert _within_window(clips, 0.0, 100.0) == clips

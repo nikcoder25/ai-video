@@ -21,6 +21,13 @@ from config import get_settings
 
 log = logging.getLogger("clipviral.ffmpeg")
 
+# Every ffmpeg call needs a ceiling. The input is whatever a user submitted, and
+# a malformed or deliberately hostile file can make a demuxer spin forever --
+# which strands the job and the single render worker with it. Reading headers
+# is near-instant; decoding four hours of audio is minutes, not hours.
+PROBE_TIMEOUT = 120.0
+AUDIO_TIMEOUT = 3600.0
+
 
 class FFmpegError(RuntimeError):
     """An ffmpeg/ffprobe call exited non-zero."""
@@ -105,7 +112,7 @@ def run(
     return proc.stderr
 
 
-def probe(path: str | Path) -> MediaInfo:
+def probe(path: str | Path, *, timeout: float = PROBE_TIMEOUT) -> MediaInfo:
     """Read stream metadata without decoding the file."""
     args = [
         "-print_format",
@@ -114,12 +121,19 @@ def probe(path: str | Path) -> MediaInfo:
         "-show_streams",
         str(path),
     ]
-    raw = subprocess.run(
-        [_bin("ffprobe"), "-hide_banner", "-loglevel", "error", *args],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        raw = subprocess.run(
+            [_bin("ffprobe"), "-hide_banner", "-loglevel", "error", *args],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        # Reading headers is near-instant on any sane file. Taking minutes means
+        # a malformed or hostile one, and without this it hangs the job -- and
+        # the single render worker behind it -- indefinitely.
+        raise FFmpegError(f"ffprobe {path}", -1, f"timed out after {timeout}s") from exc
     if raw.returncode != 0:
         raise FFmpegError(f"ffprobe {path}", raw.returncode, raw.stderr)
 
@@ -176,6 +190,7 @@ def extract_audio(video_path: str | Path, out_path: str | Path) -> Path:
             str(out),
         ],
         desc="extract 16kHz mono wav",
+        timeout=AUDIO_TIMEOUT,
     )
     return out
 

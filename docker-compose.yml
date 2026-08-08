@@ -19,6 +19,14 @@ services:
     # itself instead of taking the machine down.
     mem_limit: 3g
     memswap_limit: 3g
+    # Docker's default json-file driver never rotates, and this app logs a full
+    # ffmpeg command line per clip. Left alone it is a third way to fill the
+    # disk, alongside work dirs and uploads.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   frontend:
     build:
@@ -33,6 +41,11 @@ services:
       - backend
     restart: unless-stopped
     mem_limit: 512m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   caddy:
     image: caddy:2-alpine
@@ -50,6 +63,11 @@ services:
       - backend
       - frontend
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
   clipviral-data:

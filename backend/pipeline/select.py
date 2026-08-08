@@ -381,6 +381,43 @@ def _windows(duration: float) -> list[tuple[float, float]]:
 MAX_OUTPUT_TOKENS = 16000
 
 
+# How far outside its window a candidate may sit before we stop believing it.
+# Small: the tolerance exists for rounding, not for disagreement.
+WINDOW_SLACK = 5.0
+
+
+def _within_window(clips: Sequence[dict], w_start: float, w_end: float) -> list[dict]:
+    """Drop candidates whose timestamps fall outside the window they came from.
+
+    Each window is prompted with only its own slice of transcript and told the
+    absolute range those times live in. A model that answers relative to the
+    slice instead ("120" meaning two minutes into this section) returns a number
+    that is still a perfectly valid timestamp somewhere else in the source, so
+    it snaps to a clean sentence boundary and renders without complaint -- a
+    confident clip of entirely the wrong moment. Nothing downstream can catch
+    that, because by then the number looks ordinary.
+    """
+    kept: list[dict] = []
+    for clip in clips:
+        try:
+            start = float(clip["start"])
+            end = float(clip["end"])
+        except (KeyError, TypeError, ValueError):
+            kept.append(clip)  # malformed; validate_candidates reports it
+            continue
+        if start < w_start - WINDOW_SLACK or end > w_end + WINDOW_SLACK:
+            log.warning(
+                "dropping %.1f-%.1f: outside its window %.0f-%.0f",
+                start,
+                end,
+                w_start,
+                w_end,
+            )
+            continue
+        kept.append(clip)
+    return kept
+
+
 def _call_model(prompt: str, *, model: str, api_key: str) -> list[dict]:
     from anthropic import Anthropic
 
@@ -464,7 +501,8 @@ def select(
         # transcription already paid for. Nine good windows out of ten is a
         # usable result; re-running the whole job is not.
         try:
-            raw.extend(_call_model(prompt, model=settings.select_model, api_key=api_key))
+            proposed = _call_model(prompt, model=settings.select_model, api_key=api_key)
+            raw.extend(_within_window(proposed, w_start, w_end))
         except Exception:  # noqa: BLE001 - any API failure, not just SDK errors
             failed_windows += 1
             log.exception("window %d/%d failed, continuing", i + 1, len(windows))
