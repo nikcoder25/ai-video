@@ -31,3 +31,11 @@ backend/data/
 
 # os
 .DS_Store
+
+# generated media
+# Demo/tour recordings are rebuilt from the app whenever they are needed, and
+# the project already avoids multi-megabyte binaries in git for the same reason
+# pipeline/download.py synthesises its fixture video instead of checking one in.
+*.mp4
+*.webm
+!backend/tests/fixtures/*.mp4
